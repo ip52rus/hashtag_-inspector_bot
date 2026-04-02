@@ -7,6 +7,8 @@ import sys
 from pathlib import Path
 from typing import Final
 
+import telegram
+
 from telegram import Update
 from telegram.constants import ChatType, ParseMode
 from telegram.error import Forbidden, TelegramError
@@ -60,7 +62,7 @@ DELETE_SERVICE_MESSAGES: Final[bool] = False
 DELETE_WARNING_AFTER_SECONDS: Final[int] = 10
 
 WARNING_MESSAGE_TEMPLATE: Final[str] = (
-    "{mention}, ваше сообщение удалено. Добавьте подпись с хештегом и отправьте заново."
+    "{mention}, тебе влом хештег поставить?"
 )
 
 BOT_ENABLED: bool = True
