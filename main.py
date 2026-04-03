@@ -53,8 +53,8 @@ logging.basicConfig(
 logger = logging.getLogger("telegram_hashtag_moderator")
 
 BOT_TOKEN: Final[str] = os.getenv("BOT_TOKEN", "")
-TARGET_CHAT_ID: Final[int] = int(os.getenv("TARGET_CHAT_ID", "-1003784432229"))
-TARGET_THREAD_ID: Final[int] = int(os.getenv("TARGET_THREAD_ID", "2"))
+TARGET_CHAT_ID: Final[int] = int(os.getenv("TARGET_CHAT_ID", "-1002672769627"))
+TARGET_THREAD_ID: Final[int] = int(os.getenv("TARGET_THREAD_ID", "102816"))
 LOG_ALL_MESSAGES: Final[bool] = get_bool_env("LOG_ALL_MESSAGES", False)
 IGNORE_ADMINS: Final[bool] = get_bool_env("IGNORE_ADMINS", True)
 IGNORE_BOTS: Final[bool] = get_bool_env("IGNORE_BOTS", True)
@@ -62,7 +62,7 @@ DELETE_SERVICE_MESSAGES: Final[bool] = False
 DELETE_WARNING_AFTER_SECONDS: Final[int] = 10
 
 WARNING_MESSAGE_TEMPLATE: Final[str] = (
-    "{mention}, тебе влом хештег поставить?"
+    "{mention}, где хештег? Исправляйся!"
 )
 
 BOT_ENABLED: bool = True
