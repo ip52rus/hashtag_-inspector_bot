@@ -76,7 +76,7 @@ DISCUSS_BUTTON_TTL_SECONDS: Final[int] = 24 * 60 * 60
 GO_TO_GENERAL_BUTTON_TTL_SECONDS: Final[int] = 10
 
 WARNING_MESSAGE_TEMPLATE: Final[str] = (
-    "<b><i>{mention}, где хештег? Исправляйся!<b><i>"
+    "<b><i>{mention}, где хештег? Исправляйся!</i></b>"
 )
 
 BOT_ENABLED: bool = True
@@ -457,8 +457,12 @@ async def handle_discuss(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         logger.error("Invalid callback_data format: %s", query.data)
         return
 
-    source_message_id = int(source_message_id_str)
-    original_author_id = int(original_author_id_str)
+    try:
+        source_message_id = int(source_message_id_str)
+        original_author_id = int(original_author_id_str)
+    except ValueError:
+        logger.error("Invalid numeric IDs in callback_data: %s", query.data)
+        return
 
     source_chat_id = query.message.chat.id
     source_thread_id = getattr(query.message, "message_thread_id", None)
