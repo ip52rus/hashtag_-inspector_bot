@@ -195,6 +195,10 @@ def _is_management_command(text: str) -> bool:
     return base in {"/on", "/off", "/status"}
 
 
+def _is_edited_message_update(update: Update) -> bool:
+    return update.edited_message is not None or update.edited_channel_post is not None
+
+
 def _user_name_link_html(user_id: int, first_name: str | None) -> str:
     display_name = html.escape(first_name or "пользователь")
     return f'<a href="tg://user?id={user_id}">{display_name}</a>'
@@ -583,7 +587,7 @@ async def moderate_topic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     if _has_hashtag(update):
-        if _is_chart_image_post(msg):
+        if _is_chart_image_post(msg) and not _is_edited_message_update(update):
             try:
                 button_msg = await context.bot.send_message(
                     chat_id=chat.id,
