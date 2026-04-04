@@ -5,9 +5,9 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import Final
+from typing import Any, Final
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, Update
 from telegram.constants import ChatType, ParseMode
 from telegram.error import Forbidden, TelegramError
 from telegram.ext import (
@@ -80,6 +80,14 @@ WARNING_MESSAGE_TEMPLATE: Final[str] = (
 )
 
 BOT_ENABLED: bool = True
+
+POST_DRAFT_KEY: Final[str] = "post_draft"
+POST_WAITING_FOR_KEY: Final[str] = "post_waiting_for"
+POST_STATE_THREAD_ID: Final[str] = "thread_id"
+POST_STATE_TEXT: Final[str] = "text"
+POST_STATE_PHOTOS: Final[str] = "photos"
+
+POST_ACTION_PREFIX: Final[str] = "post:"
 
 SOURCE_MESSAGE_MISSING_ERROR_MARKERS: Final[tuple[str, ...]] = (
     "message to copy not found",
@@ -270,6 +278,111 @@ def _is_chart_image_post(msg) -> bool:
     return False
 
 
+def _get_post_draft(context: ContextTypes.DEFAULT_TYPE) -> dict[str, Any]:
+    draft = context.user_data.get(POST_DRAFT_KEY)
+    if not isinstance(draft, dict):
+        draft = {
+            POST_STATE_THREAD_ID: None,
+            POST_STATE_TEXT: "",
+            POST_STATE_PHOTOS: [],
+        }
+        context.user_data[POST_DRAFT_KEY] = draft
+    draft.setdefault(POST_STATE_THREAD_ID, None)
+    draft.setdefault(POST_STATE_TEXT, "")
+    draft.setdefault(POST_STATE_PHOTOS, [])
+    return draft
+
+
+def _reset_post_draft(context: ContextTypes.DEFAULT_TYPE) -> None:
+    context.user_data.pop(POST_DRAFT_KEY, None)
+    context.user_data.pop(POST_WAITING_FOR_KEY, None)
+
+
+def _post_thread_label(thread_id: int | None) -> str:
+    return "GENERAL" if thread_id is None else str(thread_id)
+
+
+def _post_menu_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("Указать ветку", callback_data="post:set_thread")],
+        [InlineKeyboardButton("Написать текст", callback_data="post:set_text")],
+        [InlineKeyboardButton("Добавить фото", callback_data="post:add_photo")],
+        [
+            InlineKeyboardButton("Превью", callback_data="post:preview"),
+            InlineKeyboardButton("Опубликовать", callback_data="post:publish"),
+        ],
+        [
+            InlineKeyboardButton("Очистить фото", callback_data="post:clear_photos"),
+            InlineKeyboardButton("Отмена", callback_data="post:cancel"),
+        ],
+    ])
+
+
+def _post_menu_text(draft: dict[str, Any]) -> str:
+    text = str(draft.get(POST_STATE_TEXT) or "")
+    photos = draft.get(POST_STATE_PHOTOS) or []
+    thread_id = draft.get(POST_STATE_THREAD_ID)
+    moderation_state = "включена" if BOT_ENABLED else "выключена"
+
+    return (
+        "<b>Создание поста</b>\n\n"
+        f"Группа: <code>{TARGET_CHAT_ID}</code>\n"
+        f"Ветка: <code>{_post_thread_label(thread_id)}</code>\n"
+        f"Текст: {'есть' if text else 'не задан'}\n"
+        f"Фото: {len(photos)}\n"
+        f"Модерация: {moderation_state}\n\n"
+        "Оформление текста можно отправлять в HTML: "
+        "<code>&lt;b&gt;</code>, <code>&lt;i&gt;</code>, <code>&lt;a href=\"...\"&gt;</code>, списки строками."
+    )
+
+
+async def _send_post_menu(chat_id: int, context: ContextTypes.DEFAULT_TYPE, draft: dict[str, Any] | None = None) -> None:
+    if draft is None:
+        draft = _get_post_draft(context)
+
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=_post_menu_text(draft),
+        parse_mode=ParseMode.HTML,
+        reply_markup=_post_menu_keyboard(),
+        disable_web_page_preview=True,
+    )
+
+
+def _parse_thread_id(raw_value: str) -> int | None:
+    cleaned = raw_value.strip()
+    if not cleaned or cleaned in {"0", "general", "general_topic", "none", "-"}:
+        return None
+    return int(cleaned)
+
+
+async def _send_post_content(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    thread_id: int | None,
+    text: str,
+    photo_file_ids: list[str],
+) -> None:
+    send_kwargs = {"chat_id": chat_id}
+    if thread_id is not None:
+        send_kwargs["message_thread_id"] = thread_id
+
+    if photo_file_ids:
+        if len(photo_file_ids) == 1:
+            await context.bot.send_photo(photo=photo_file_ids[0], **send_kwargs)
+        else:
+            media_group = [InputMediaPhoto(media=file_id) for file_id in photo_file_ids[:10]]
+            await context.bot.send_media_group(media=media_group, **send_kwargs)
+
+    if text:
+        await context.bot.send_message(
+            text=text,
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True,
+            **send_kwargs,
+        )
+
+
 async def _is_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     chat = update.effective_chat
     user = update.effective_user
@@ -283,6 +396,30 @@ async def _is_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     except TelegramError as exc:
         logger.warning("Could not check admin status for user %s: %s", user.id, exc)
         return False
+
+
+async def _is_target_chat_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    user = update.effective_user
+    if not user:
+        return False
+
+    try:
+        member = await context.bot.get_chat_member(TARGET_CHAT_ID, user.id)
+        return member.status in {"administrator", "creator"}
+    except TelegramError as exc:
+        logger.warning("Could not check TARGET_CHAT_ID admin status for user %s: %s", user.id, exc)
+        return False
+
+
+async def _can_manage_bot(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    chat = update.effective_chat
+    if not chat:
+        return False
+
+    if chat.type == ChatType.PRIVATE:
+        return await _is_target_chat_admin(update, context)
+
+    return await _is_admin(update, context)
 
 
 async def _get_user_first_name(chat_id: int, user_id: int, context: ContextTypes.DEFAULT_TYPE) -> str | None:
@@ -302,6 +439,12 @@ async def _delete_message_safe(message) -> None:
         await message.delete()
     except TelegramError:
         pass
+
+
+async def _delete_command_message_if_group(update: Update) -> None:
+    chat = update.effective_chat
+    if chat and chat.type != ChatType.PRIVATE:
+        await _delete_message_safe(update.effective_message)
 
 
 async def _delete_bot_message_later(bot_message, context: ContextTypes.DEFAULT_TYPE, seconds: int) -> None:
@@ -378,6 +521,9 @@ async def _reply_temp(
     if not msg or not chat:
         return
 
+    if chat.type == ChatType.PRIVATE:
+        delete_after = 0
+
     try:
         sent = await context.bot.send_message(
             chat_id=chat.id,
@@ -416,43 +562,247 @@ async def _send_temporary_go_to_general_button(
 async def cmd_off(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     global BOT_ENABLED
 
-    msg = update.effective_message
-
-    if not await _is_admin(update, context):
-        await _delete_message_safe(msg)
+    if not await _can_manage_bot(update, context):
+        await _delete_command_message_if_group(update)
         return
 
     BOT_ENABLED = False
     logger.info("Moderation disabled by user_id=%s", getattr(update.effective_user, "id", None))
-    await _delete_message_safe(msg)
+    await _delete_command_message_if_group(update)
     await _reply_temp(update, context, "Модерация выключена.", delete_after=10)
 
 
 async def cmd_on(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     global BOT_ENABLED
 
-    msg = update.effective_message
-
-    if not await _is_admin(update, context):
-        await _delete_message_safe(msg)
+    if not await _can_manage_bot(update, context):
+        await _delete_command_message_if_group(update)
         return
 
     BOT_ENABLED = True
     logger.info("Moderation enabled by user_id=%s", getattr(update.effective_user, "id", None))
-    await _delete_message_safe(msg)
+    await _delete_command_message_if_group(update)
     await _reply_temp(update, context, "Модерация включена.", delete_after=10)
 
 
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    msg = update.effective_message
-
-    if not await _is_admin(update, context):
-        await _delete_message_safe(msg)
+    if not await _can_manage_bot(update, context):
+        await _delete_command_message_if_group(update)
         return
 
     status_text = "Модерация включена." if BOT_ENABLED else "Модерация выключена."
-    await _delete_message_safe(msg)
+    await _delete_command_message_if_group(update)
     await _reply_temp(update, context, status_text, delete_after=10)
+
+
+async def cmd_post(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat = update.effective_chat
+    if not chat:
+        return
+
+    if chat.type != ChatType.PRIVATE:
+        await _reply_temp(update, context, "Создание поста доступно в личных сообщениях с ботом.", delete_after=10)
+        return
+
+    if not await _is_target_chat_admin(update, context):
+        await context.bot.send_message(
+            chat_id=chat.id,
+            text="Нет прав для публикации. Нужен статус администратора в целевой группе.",
+        )
+        return
+
+    draft = _get_post_draft(context)
+    await _send_post_menu(chat.id, context, draft)
+
+
+async def handle_post_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    chat = update.effective_chat
+
+    if not query or not query.data or not chat:
+        return
+
+    if chat.type != ChatType.PRIVATE:
+        await query.answer()
+        return
+
+    if not await _is_target_chat_admin(update, context):
+        await query.answer("Нет прав для публикации.", show_alert=True)
+        return
+
+    action = query.data.removeprefix(POST_ACTION_PREFIX)
+    draft = _get_post_draft(context)
+
+    await query.answer()
+
+    if action == "set_thread":
+        context.user_data[POST_WAITING_FOR_KEY] = POST_STATE_THREAD_ID
+        await context.bot.send_message(
+            chat_id=chat.id,
+            text=(
+                "Пришли <code>message_thread_id</code> нужной ветки.\n"
+                "Если нужен GENERAL, отправь <code>0</code>."
+            ),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    if action == "set_text":
+        context.user_data[POST_WAITING_FOR_KEY] = POST_STATE_TEXT
+        await context.bot.send_message(
+            chat_id=chat.id,
+            text=(
+                "Пришли текст поста в HTML.\n\n"
+                "Пример:\n"
+                "<code>&lt;b&gt;Заголовок&lt;/b&gt;\n\n"
+                "• Пункт 1\n"
+                "• Пункт 2\n\n"
+                "&lt;a href=\"https://example.com\"&gt;Ссылка&lt;/a&gt;</code>"
+            ),
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True,
+        )
+        return
+
+    if action == "add_photo":
+        context.user_data[POST_WAITING_FOR_KEY] = POST_STATE_PHOTOS
+        await context.bot.send_message(
+            chat_id=chat.id,
+            text="Пришли одно или несколько фото отдельными сообщениями. После этого нажми «Превью» или «Опубликовать».",
+        )
+        return
+
+    if action == "clear_photos":
+        draft[POST_STATE_PHOTOS] = []
+        await context.bot.send_message(chat_id=chat.id, text="Фото очищены.")
+        await _send_post_menu(chat.id, context, draft)
+        return
+
+    if action == "cancel":
+        _reset_post_draft(context)
+        await context.bot.send_message(chat_id=chat.id, text="Черновик сброшен.")
+        return
+
+    if action == "preview":
+        if not draft.get(POST_STATE_TEXT) and not draft.get(POST_STATE_PHOTOS):
+            await context.bot.send_message(chat_id=chat.id, text="Черновик пустой.")
+            await _send_post_menu(chat.id, context, draft)
+            return
+
+        await context.bot.send_message(
+            chat_id=chat.id,
+            text=(
+                "<b>Превью</b>\n"
+                f"Группа: <code>{TARGET_CHAT_ID}</code>\n"
+                f"Ветка: <code>{_post_thread_label(draft.get(POST_STATE_THREAD_ID))}</code>"
+            ),
+            parse_mode=ParseMode.HTML,
+        )
+        try:
+            await _send_post_content(
+                context=context,
+                chat_id=chat.id,
+                thread_id=None,
+                text=str(draft.get(POST_STATE_TEXT) or ""),
+                photo_file_ids=list(draft.get(POST_STATE_PHOTOS) or []),
+            )
+        except TelegramError as exc:
+            logger.error("Failed to render post preview: %s", exc)
+            await context.bot.send_message(chat_id=chat.id, text=f"Не удалось показать превью: {exc}")
+
+        await _send_post_menu(chat.id, context, draft)
+        return
+
+    if action == "publish":
+        if not draft.get(POST_STATE_TEXT) and not draft.get(POST_STATE_PHOTOS):
+            await context.bot.send_message(chat_id=chat.id, text="Черновик пустой, публиковать нечего.")
+            await _send_post_menu(chat.id, context, draft)
+            return
+
+        try:
+            await _send_post_content(
+                context=context,
+                chat_id=TARGET_CHAT_ID,
+                thread_id=draft.get(POST_STATE_THREAD_ID),
+                text=str(draft.get(POST_STATE_TEXT) or ""),
+                photo_file_ids=list(draft.get(POST_STATE_PHOTOS) or []),
+            )
+        except TelegramError as exc:
+            logger.error("Failed to publish post: %s", exc)
+            await context.bot.send_message(chat_id=chat.id, text=f"Публикация не удалась: {exc}")
+            await _send_post_menu(chat.id, context, draft)
+            return
+
+        _reset_post_draft(context)
+        await context.bot.send_message(chat_id=chat.id, text="Пост опубликован.")
+
+
+async def handle_private_post_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat = update.effective_chat
+    msg = update.effective_message
+
+    if not chat or not msg or chat.type != ChatType.PRIVATE:
+        return
+
+    waiting_for = context.user_data.get(POST_WAITING_FOR_KEY)
+    if not waiting_for:
+        return
+
+    if not await _is_target_chat_admin(update, context):
+        return
+
+    draft = _get_post_draft(context)
+
+    if waiting_for == POST_STATE_THREAD_ID:
+        try:
+            draft[POST_STATE_THREAD_ID] = _parse_thread_id(msg.text or "")
+        except ValueError:
+            await context.bot.send_message(
+                chat_id=chat.id,
+                text="Нужен числовой thread_id. Для GENERAL отправь 0.",
+            )
+            return
+
+        context.user_data.pop(POST_WAITING_FOR_KEY, None)
+        await context.bot.send_message(
+            chat_id=chat.id,
+            text=f"Ветка установлена: {_post_thread_label(draft.get(POST_STATE_THREAD_ID))}",
+        )
+        await _send_post_menu(chat.id, context, draft)
+        return
+
+    if waiting_for == POST_STATE_TEXT:
+        if msg.entities:
+            draft[POST_STATE_TEXT] = msg.text_html or msg.text or ""
+        else:
+            draft[POST_STATE_TEXT] = msg.text or ""
+        context.user_data.pop(POST_WAITING_FOR_KEY, None)
+        await context.bot.send_message(chat_id=chat.id, text="Текст сохранен.")
+        await _send_post_menu(chat.id, context, draft)
+        return
+
+    if waiting_for == POST_STATE_PHOTOS:
+        if msg.photo:
+            file_id = msg.photo[-1].file_id
+        elif _is_image_document(msg):
+            file_id = msg.document.file_id
+        else:
+            await context.bot.send_message(chat_id=chat.id, text="Нужно отправить фото или image-документ.")
+            return
+
+        photos = draft.get(POST_STATE_PHOTOS)
+        if not isinstance(photos, list):
+            photos = []
+            draft[POST_STATE_PHOTOS] = photos
+
+        if len(photos) >= 10:
+            await context.bot.send_message(chat_id=chat.id, text="Уже добавлено 10 фото. Это максимум для одного поста.")
+            await _send_post_menu(chat.id, context, draft)
+            return
+
+        photos.append(file_id)
+        await context.bot.send_message(chat_id=chat.id, text=f"Фото добавлено. Всего фото: {len(photos)}")
+        return
 
 
 async def handle_discuss(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -535,15 +885,6 @@ async def handle_discuss(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await context.bot.send_message(**send_kwargs)
     except TelegramError as exc:
         logger.error("Failed to send discussion intro message: %s", exc)
-
-    try:
-        await button_message.delete()
-    except TelegramError as exc:
-        logger.error(
-            "Copied successfully, but failed to delete discuss button message_id=%s: %s",
-            button_message.message_id,
-            exc,
-        )
 
     await _send_temporary_go_to_general_button(
         chat_id=source_chat_id,
@@ -660,8 +1001,11 @@ def main() -> None:
     app.add_handler(CommandHandler("off", cmd_off))
     app.add_handler(CommandHandler("on", cmd_on))
     app.add_handler(CommandHandler("status", cmd_status))
+    app.add_handler(CommandHandler("post", cmd_post))
     app.add_handler(CallbackQueryHandler(handle_discuss, pattern=r"^discuss:"))
+    app.add_handler(CallbackQueryHandler(handle_post_callback, pattern=r"^post:"))
 
+    app.add_handler(MessageHandler(filters.ChatType.PRIVATE & ~filters.COMMAND, handle_private_post_input))
     message_filter = filters.ALL
     app.add_handler(MessageHandler(message_filter, moderate_topic))
 
