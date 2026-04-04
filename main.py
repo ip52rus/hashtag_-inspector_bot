@@ -81,6 +81,11 @@ WARNING_MESSAGE_TEMPLATE: Final[str] = (
 
 BOT_ENABLED: bool = True
 
+SOURCE_MESSAGE_MISSING_ERROR_MARKERS: Final[tuple[str, ...]] = (
+    "message to copy not found",
+    "message not found",
+)
+
 SERVICE_MESSAGE_FIELDS: Final[tuple[str, ...]] = (
     "new_chat_members",
     "left_chat_member",
@@ -197,6 +202,11 @@ def _is_management_command(text: str) -> bool:
 
 def _is_edited_message_update(update: Update) -> bool:
     return update.edited_message is not None or update.edited_channel_post is not None
+
+
+def _is_source_message_missing_error(exc: TelegramError) -> bool:
+    error_text = str(exc).lower()
+    return any(marker in error_text for marker in SOURCE_MESSAGE_MISSING_ERROR_MARKERS)
 
 
 def _user_name_link_html(user_id: int, first_name: str | None) -> str:
@@ -500,6 +510,8 @@ async def handle_discuss(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             DISCUSSION_THREAD_ID if DISCUSSION_THREAD_ID is not None else "GENERAL",
             exc,
         )
+        if _is_source_message_missing_error(exc):
+            await _delete_message_safe(button_message)
         return
 
     original_author_first_name = await _get_user_first_name(source_chat_id, original_author_id, context)
