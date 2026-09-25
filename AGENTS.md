@@ -48,7 +48,7 @@ When requirements are ambiguous, ask rather than inventing product behavior.
 - Read secrets from environment variables.
 - Keep `.env` ignored.
 - Use only fake values in `.env.example`.
-- Do not expose real chat IDs, thread IDs or other production identifiers in public files.
+- Bot tokens and other credentials are secrets and must never be committed.\n- Chat IDs and thread IDs are configuration values, not credentials; they may be kept as documented defaults when they are intentionally public and do not grant access.
 - Do not change deployment configuration unless explicitly requested.
 
 ## Current technical constraints
