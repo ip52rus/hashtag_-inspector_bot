@@ -1,5 +1,11 @@
 # Hashtag Inspector
 
+[![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![python-telegram-bot](https://img.shields.io/badge/python--telegram--bot-21.10-26A5E4?logo=telegram&logoColor=white)](https://docs.python-telegram-bot.org/)
+[![Telegram Bot API](https://img.shields.io/badge/Telegram-Bot%20API-26A5E4?logo=telegram&logoColor=white)](https://core.telegram.org/bots/api)
+[![asyncio](https://img.shields.io/badge/asyncio-asynchronous-4B8BBE)](https://docs.python.org/3/library/asyncio.html)
+[![Bothost](https://img.shields.io/badge/Deployment-Bothost-555555)](https://bothost.ru/)
+
 Telegram bot for moderating a selected topic in a forum-enabled supergroup.
 
 The project was created for a real Telegram community and is currently deployed and in use. Its behavior evolved from practical requirements and testing in the group.
