@@ -5,6 +5,7 @@
 [![Telegram Bot API](https://img.shields.io/badge/Telegram-Bot%20API-26A5E4?logo=telegram&logoColor=white)](https://core.telegram.org/bots/api)
 [![asyncio](https://img.shields.io/badge/asyncio-asynchronous-4B8BBE)](https://docs.python.org/3/library/asyncio.html)
 [![Bothost](https://img.shields.io/badge/Deployment-Bothost-555555)](https://bothost.ru/)
+[![PyCharm](https://img.shields.io/badge/IDE-PyCharm-000000?logo=pycharm&logoColor=white)](https://www.jetbrains.com/pycharm/)
 
 Telegram bot for moderating a selected topic in a forum-enabled supergroup.
 
