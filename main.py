@@ -58,8 +58,8 @@ logging.basicConfig(
 logger = logging.getLogger("telegram_hashtag_moderator")
 
 BOT_TOKEN: Final[str] = os.getenv("BOT_TOKEN", "")
-TARGET_CHAT_ID: Final[int] = int(os.getenv("TARGET_CHAT_ID", "0"))
-TARGET_THREAD_ID: Final[int] = int(os.getenv("TARGET_THREAD_ID", "0"))
+TARGET_CHAT_ID: Final[int] = int(os.getenv("TARGET_CHAT_ID", "-1002672769627"))
+TARGET_THREAD_ID: Final[int] = int(os.getenv("TARGET_THREAD_ID", "102816"))
 
 # Для GENERAL оставь пустым в .env:
 # DISCUSSION_THREAD_ID=
